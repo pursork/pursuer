@@ -1,0 +1,94 @@
+#!/bin/sh
+
+# --- 配置区 ---
+token=TG_TOKEN
+id=TG_ID
+hostname=DEVICE
+
+# --- 脚本区 ---
+# 如果 token 未配置，则退出脚本
+if [ -z "${token}" ]; then
+    # echo "错误：token 未配置，无法发送通知。" >&2
+    exit 1
+fi
+
+# 检查是否为 SSH 登录会话
+if [ -n "$SSH_CONNECTION" ]; then
+
+    # 1. 获取基础信息
+    HOSTNAME=$hostname
+    LOGIN_USER=$USER
+    LOGIN_TIME=$(TZ=UTC-8 date "+%Y-%m-%d %H:%M:%S") # 使用 UTC+8 (北京时间)
+    LOGIN_IP=$(echo $SSH_CONNECTION | awk '{print $1}')
+
+    # 2. IP 地理位置查询（best-effort，不阻塞登录）
+    GEO_INFO="地理位置: 查询超时或不可用"
+    GEO_JSON=$(curl -fsS --connect-timeout 1 --max-time 2 "https://ipwho.is/${LOGIN_IP}" 2>/dev/null || true)
+    if [ -n "$GEO_JSON" ]; then
+        GEO_STATUS=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"success":\([^,}]*\).*/\1/p' | head -n 1 | tr -d '[:space:]')
+        if [ "$GEO_STATUS" = "true" ]; then
+            GEO_CITY=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"city":"\([^"]*\)".*/\1/p' | head -n 1)
+            GEO_REGION=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"region":"\([^"]*\)".*/\1/p' | head -n 1)
+            GEO_COUNTRY=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"country_code":"\([^"]*\)".*/\1/p' | head -n 1)
+            GEO_ORG=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"org":"\([^"]*\)".*/\1/p' | head -n 1)
+            [ -z "$GEO_ORG" ] && GEO_ORG=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"isp":"\([^"]*\)".*/\1/p' | head -n 1)
+            GEO_INFO="地理位置: ${GEO_CITY}, ${GEO_REGION}, ${GEO_COUNTRY}\n- 归属组织: ${GEO_ORG}"
+        else
+            GEO_MESSAGE=$(printf '%s' "$GEO_JSON" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p' | head -n 1)
+            [ -z "$GEO_MESSAGE" ] && GEO_MESSAGE="查询失败"
+            GEO_INFO="地理位置: 无法查询 (${GEO_MESSAGE})"
+        fi
+    fi
+
+    # 3. [新增] 获取系统资源信息
+    UPTIME_INFO=$(uptime | sed 's/,  */, /g')
+    DISK_INFO=$(df -h / | awk 'NR==2 {print "总计:"$2 ", 已用:"$3 " ("$5")"}')
+    # [新增] 获取内存使用情况
+    MEM_INFO=$(free -h | awk 'NR==2 {print "总计:"$2 ", 已用:"$3 ", 可用:"$7}')
+
+    # 4. [修改] 使用 journalctl 替换 last
+    # -u ssh.service: 筛选 sshd 服务的日志（Ubuntu/Debian 单元名为 ssh.service）
+    # -n 5: 显示最后 5 条
+    # --no-pager: 禁止分页
+    # -o short-iso: 使用 'YYYY-MM-DD HH:MM:SS' 格式化时间戳，更易读
+    RECENT_SSH_ACTIVITY=$(journalctl -u ssh.service -n 5 --no-pager -o short-iso)
+    # 如果 journalctl 输出为空（极少见），则提供回退信息
+    if [ -z "$RECENT_SSH_ACTIVITY" ]; then
+        RECENT_SSH_ACTIVITY="[无法从 journalctl 读取 SSH 日志]"
+    fi
+
+
+    # 5. 组装描述 (desp) 
+    # [修改] 更新了 desp 变量以包含所有新信息
+    desp="
+🛡️ **服务器安全登录提醒**
+主机: **${LOGIN_USER}@${HOSTNAME}**
+
+您好，系统检测到有新的 SSH 登录活动，详情如下：
+
+**登录详情**
+- 登录时间: ${LOGIN_TIME} (北京时间)
+- 登录用户: ${LOGIN_USER}
+- 来源 IP: **${LOGIN_IP}**
+- ${GEO_INFO}
+
+**系统资源**
+- 系统负载: ${UPTIME_INFO}
+- 磁盘使用: ${DISK_INFO}
+- 内存使用: ${MEM_INFO}
+
+**近期 SSH 活动 (journalctl)**
+\`\`\`
+${RECENT_SSH_ACTIVITY}
+\`\`\`
+"
+
+    # 6. 使用 curl 发送通知 (使用适配多行文本的 POST 方法)
+    # -s (silent) 隐藏进度
+    # --data-urlencode "text=${desp}": 确保所有特殊字符和换行符被正确编码
+    # "parse_mode=Markdown": [新增] 允许使用 Markdown 格式 (如上面的 **粗体** 和 \`\`\`代码块\`\`\`)
+    curl -s --connect-timeout 2 --max-time 5 -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+         -d "chat_id=${id}" \
+         -d "parse_mode=Markdown" \
+         --data-urlencode "text=${desp}" > /dev/null 2>&1
+fi
