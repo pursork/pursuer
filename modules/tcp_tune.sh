@@ -18,6 +18,12 @@ _module_main() {
 
     local action="${TCP_TUNE_ACTION:-apply}"
 
+    # ── 0. 确保 ethtool 已安装（tcp-auto-tune.sh 用于探测网卡链路速率）──
+    if ! command -v ethtool &>/dev/null; then
+        info "安装 ethtool..."
+        apt install -y ethtool &>/dev/null
+    fi
+
     # ── 1. 下载三个文件到同一 tmpdir ─────────────────────────────────
     # tcp-auto-tune.sh 通过 SCRIPT_DIR 定位 AWK 引擎，三文件必须同目录
     local _tmpdir

@@ -990,6 +990,7 @@ command_apply() {
     save_file_backup
     mkdir -p "$(dirname "$CONF_PATH")"
     cp "$tmp_config" "$CONF_PATH"
+    chmod 644 "$CONF_PATH"
     if ! apply_sysctl_file "$CONF_PATH"; then
         log "sysctl 应用失败，正在回滚..."
         local _rollback_ok=0

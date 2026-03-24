@@ -209,7 +209,7 @@ _module_main() {
     # 安装基础包
     info "更新包列表并安装基础工具..."
     apt update -qq
-    apt install -y ufw curl wget unzip socat cron unattended-upgrades
+    apt install -y ufw curl wget unzip socat cron unattended-upgrades ethtool iputils-ping
 
     # 启用自动安全更新
     info "启用 unattended-upgrades 自动安全更新..."
